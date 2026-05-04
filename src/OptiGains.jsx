@@ -505,15 +505,13 @@ function DashboardTab({ data, update, setWorkoutState }) {
   const todayNutrition = nutrition.find(n => n.date === todayStr);
   const cals = todayNutrition?.calories || 0;
   const calPct = Math.min(100, (cals / settings.calorieTarget) * 100);
-  const thisWeekSessions = workoutHistory.filter(w => {
-    const d = new Date(w.date);
+  const thisWeekSessions = (() => {
     const now = new Date();
-    // Get Monday of current week in local time
-    const day = now.getDay(); // 0=Sun, 1=Mon ... 6=Sat
+    const day = now.getDay();
     const daysToMonday = day === 0 ? 6 : day - 1;
     const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysToMonday, 0, 0, 0, 0);
-    return d >= monday;
-  }).length;
+    return workoutHistory.filter(w => new Date(w.date) >= monday).length;
+  })();
   const weeklyPRs = Object.values(prs).filter(pr => {
     const d = new Date(pr.date);
     const now = new Date();
@@ -605,14 +603,13 @@ function DashboardTab({ data, update, setWorkoutState }) {
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             {sessions.map((s, i) => {
-              const done = workoutHistory.some(w => {
-                const d = new Date(w.date);
+              const done = (() => {
                 const now = new Date();
                 const day = now.getDay();
                 const daysToMonday = day === 0 ? 6 : day - 1;
                 const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysToMonday, 0, 0, 0, 0);
-                return d >= monday && w.sessionId === s.id;
-              });
+                return workoutHistory.some(w => new Date(w.date) >= monday && w.sessionId === s.id);
+              })();
               return <div key={i} style={{ width: 10, height: 10, borderRadius: "50%", background: done ? s.color : "#1a1f2e", border: `1px solid ${done ? s.color : "#2a2f3e"}` }} />;
             })}
           </div>
@@ -879,7 +876,7 @@ function ManualSessionEntry({ sessions, update, onClose }) {
       id: uid(),
       sessionId: selectedSession.id,
       sessionType: selectedSession.type,
-      date: new Date(selectedDate + "T12:00:00").toISOString(),
+      date: (() => { const d = new Date(selectedDate); d.setHours(12,0,0,0); return d.toISOString(); })(),
       log,
       exercises: exerciseRows.map(ex => { const { setData, ...rest } = ex; return rest; }),
       duration: 60,
