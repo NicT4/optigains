@@ -491,7 +491,8 @@ function DashboardTab({ data, update, setWorkoutState }) {
   const thisWeekSessions = workoutHistory.filter(w => {
     const d = new Date(w.date);
     const now = new Date();
-    const weekStart = new Date(now.setDate(now.getDate() - now.getDay() + 1));
+    const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+    weekStart.setHours(0, 0, 0, 0);
     return d >= weekStart;
   }).length;
   const weeklyPRs = Object.values(prs).filter(pr => {
@@ -588,7 +589,8 @@ function DashboardTab({ data, update, setWorkoutState }) {
               const done = workoutHistory.some(w => {
                 const d = new Date(w.date);
                 const now = new Date();
-                const weekStart = new Date(now.setDate(now.getDate() - now.getDay() + 1));
+                const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+                weekStart.setHours(0, 0, 0, 0);
                 return d >= weekStart && w.sessionId === s.id;
               });
               return <div key={i} style={{ width: 10, height: 10, borderRadius: "50%", background: done ? s.color : "#1a1f2e", border: `1px solid ${done ? s.color : "#2a2f3e"}` }} />;
@@ -607,6 +609,9 @@ function WorkoutTab({ data, update, setWorkoutState, modal, setModal }) {
   const todayStr = today();
   const [editingSession, setEditingSession] = useState(null);
   const [showAddSession, setShowAddSession] = useState(false);
+  const [workoutSubTab, setWorkoutSubTab] = useState("plan"); // plan | history
+  const [viewingHistory, setViewingHistory] = useState(null); // workout entry being viewed/edited
+  const [editingLog, setEditingLog] = useState(null); // deep copy of log being edited
 
   const startWorkout = (session) => {
     const init = {};
@@ -618,12 +623,125 @@ function WorkoutTab({ data, update, setWorkoutState, modal, setModal }) {
   const unskipSession = (sessionId) => update(d => { if (d.skippedSessions) delete d.skippedSessions[`${todayStr}_${sessionId}`]; });
   const deleteSession = (sessionId) => update(d => { d.sessions = d.sessions.filter(s => s.id !== sessionId); });
 
+  const openHistory = (entry) => {
+    setViewingHistory(entry);
+    setEditingLog(JSON.parse(JSON.stringify(entry.log || {})));
+  };
+
+  const saveHistoryEdit = () => {
+    update(d => {
+      const idx = d.workoutHistory.findIndex(w => w.id === viewingHistory.id);
+      if (idx >= 0) d.workoutHistory[idx] = { ...d.workoutHistory[idx], log: editingLog };
+    });
+    setViewingHistory(prev => ({ ...prev, log: editingLog }));
+    alert("Changes saved!");
+  };
+
+  const deleteHistoryEntry = (id) => {
+    if (!window.confirm("Delete this workout entry?")) return;
+    update(d => { d.workoutHistory = d.workoutHistory.filter(w => w.id !== id); });
+    setViewingHistory(null);
+  };
+
+  // If viewing a history entry, show detail view
+  if (viewingHistory) {
+    const entry = viewingHistory;
+    const sessionColor = sessions.find(s => s.id === entry.sessionId)?.color || "#4ade80";
+    return (
+      <div style={{ padding: "20px 16px 80px" }}>
+        <button onClick={() => setViewingHistory(null)} style={{ background: "none", border: "none", color: "#555", fontSize: 14, cursor: "pointer", fontFamily: "inherit", marginBottom: 16, padding: 0 }}>← Back to History</button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+          <div>
+            <p style={{ margin: "0 0 4px", fontSize: 11, color: sessionColor, fontWeight: 700, letterSpacing: 1 }}>{entry.sessionType?.toUpperCase()} DAY</p>
+            <h2 style={{ margin: "0 0 2px", fontSize: 22, fontWeight: 700 }}>{formatDate(entry.date)}</h2>
+            <p style={{ margin: 0, fontSize: 12, color: "#555" }}>{new Date(entry.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} · {entry.duration || 0} mins</p>
+          </div>
+          <button onClick={() => deleteHistoryEntry(entry.id)} style={{ background: "#f8717118", border: "1px solid #f8717144", borderRadius: 10, padding: "7px 12px", color: "#f87171", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>🗑 Delete</button>
+        </div>
+
+        {(entry.exercises || []).map((ex, ei) => {
+          const sets = editingLog?.[ei] || {};
+          return (
+            <div key={ei} style={{ background: "#111827", border: `1px solid ${sessionColor}22`, borderRadius: 14, padding: "14px", marginBottom: 10 }}>
+              <p style={{ margin: "0 0 2px", fontSize: 11, color: sessionColor, fontWeight: 700, letterSpacing: 0.5 }}>{ex.muscleGroup?.toUpperCase()}</p>
+              <p style={{ margin: "0 0 10px", fontSize: 16, fontWeight: 700 }}>{ex.name}</p>
+              {/* Set rows editable */}
+              <div style={{ background: "#0d1117", borderRadius: 10, padding: "0 10px" }}>
+                <div style={{ display: "flex", gap: 6, padding: "8px 0 6px", borderBottom: "1px solid #1a1f2e" }}>
+                  <span style={{ width: 28, fontSize: 10, color: "#3d4451", fontWeight: 700 }}>SET</span>
+                  <span style={{ flex: 1, textAlign: "center", fontSize: 10, color: "#3d4451", fontWeight: 700 }}>KG</span>
+                  <span style={{ flex: 1, textAlign: "center", fontSize: 10, color: "#3d4451", fontWeight: 700 }}>REPS</span>
+                  <span style={{ width: 50, textAlign: "center", fontSize: 10, color: "#3d4451", fontWeight: 700 }}>DONE</span>
+                </div>
+                {Object.entries(sets).map(([si, setData]) => (
+                  <div key={si} style={{ display: "flex", gap: 6, padding: "7px 0", borderBottom: "1px solid #1a1f2e", alignItems: "center" }}>
+                    <span style={{ width: 28, fontSize: 13, fontWeight: 700, color: setData.done ? sessionColor : "#3d4451" }}>{parseInt(si) + 1}</span>
+                    <input type="number" value={setData.weight || ""} onChange={e => setEditingLog(prev => ({ ...prev, [ei]: { ...prev[ei], [si]: { ...prev[ei][si], weight: e.target.value } } }))} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", fontSize: 14, fontWeight: 700, textAlign: "center", padding: "6px 4px", fontFamily: "inherit", outline: "none" }} placeholder="—" />
+                    <input type="number" value={setData.reps || ""} onChange={e => setEditingLog(prev => ({ ...prev, [ei]: { ...prev[ei], [si]: { ...prev[ei][si], reps: e.target.value } } }))} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", fontSize: 14, fontWeight: 700, textAlign: "center", padding: "6px 4px", fontFamily: "inherit", outline: "none" }} placeholder="—" />
+                    <div style={{ width: 50, textAlign: "center" }}>
+                      <span style={{ fontSize: 14, color: setData.done ? sessionColor : "#2a2f3e" }}>{setData.done ? "✓" : "○"}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        <button onClick={saveHistoryEdit} style={{ width: "100%", background: "#4ade80", border: "none", borderRadius: 14, padding: "15px", color: "#0d1117", fontWeight: 700, fontSize: 15, cursor: "pointer", fontFamily: "inherit", marginTop: 8 }}>Save Changes</button>
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: "52px 16px 16px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700, letterSpacing: -1 }}>Training</h1>
-        <button onClick={() => setShowAddSession(true)} style={{ background: "#4ade8018", border: "1px solid #4ade8044", borderRadius: 10, padding: "8px 14px", color: "#4ade80", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>+ Session</button>
+        {workoutSubTab === "plan" && <button onClick={() => setShowAddSession(true)} style={{ background: "#4ade8018", border: "1px solid #4ade8044", borderRadius: 10, padding: "8px 14px", color: "#4ade80", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>+ Session</button>}
       </div>
+
+      {/* Sub tabs */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {["plan", "history"].map(t => (
+          <button key={t} onClick={() => setWorkoutSubTab(t)} style={{ flex: 1, background: workoutSubTab === t ? "#4ade80" : "#111827", border: `1px solid ${workoutSubTab === t ? "transparent" : "#1a1f2e"}`, borderRadius: 12, padding: "10px", color: workoutSubTab === t ? "#0d1117" : "#555", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit", letterSpacing: 0.5 }}>{t === "plan" ? "📋 PLAN" : "🕐 HISTORY"}</button>
+        ))}
+      </div>
+
+      {/* History Sub Tab */}
+      {workoutSubTab === "history" && (
+        <div>
+          {(data.workoutHistory || []).length === 0 ? (
+            <div style={{ textAlign: "center", padding: "60px 0", color: "#444" }}>
+              <p style={{ fontSize: 36 }}>🏋️</p>
+              <p style={{ fontWeight: 700 }}>No workouts logged yet</p>
+              <p style={{ fontSize: 13 }}>Complete a session to see it here</p>
+            </div>
+          ) : (data.workoutHistory || []).map(entry => {
+            const color = sessions.find(s => s.id === entry.sessionId)?.color || "#4ade80";
+            const doneSets = Object.values(entry.log || {}).reduce((a, ex) => a + Object.values(ex).filter(s => s.done).length, 0);
+            const totalSets = Object.values(entry.log || {}).reduce((a, ex) => a + Object.values(ex).length, 0);
+            return (
+              <div key={entry.id} onClick={() => openHistory(entry)} style={{ background: "#111827", border: `1px solid ${color}22`, borderRadius: 14, padding: "14px 16px", marginBottom: 10, cursor: "pointer", position: "relative", overflow: "hidden" }}>
+                <div style={{ position: "absolute", top: 0, left: 0, width: 4, height: "100%", background: color }} />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <span style={{ background: `${color}22`, color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{entry.sessionType}</span>
+                    <p style={{ margin: "6px 0 2px", fontWeight: 700, fontSize: 16 }}>{formatDate(entry.date)}</p>
+                    <p style={{ margin: 0, fontSize: 12, color: "#555" }}>{new Date(entry.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} · {entry.duration || 0} mins · {(entry.exercises || []).length} exercises</p>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <p style={{ margin: 0, color, fontWeight: 800, fontSize: 20 }}>{doneSets}<span style={{ fontSize: 13, color: "#555" }}>/{totalSets}</span></p>
+                    <p style={{ margin: 0, color: "#555", fontSize: 11 }}>SETS</p>
+                    <p style={{ margin: "4px 0 0", fontSize: 11, color: "#3d4451" }}>Tap to view ›</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Plan Sub Tab */}
+      {workoutSubTab === "plan" && <div>
 
       {sessions.map(session => {
         const isSkipped = skippedSessions?.[`${todayStr}_${session.id}`];
@@ -655,6 +773,7 @@ function WorkoutTab({ data, update, setWorkoutState, modal, setModal }) {
       {/* Edit Session Modal */}
       {editingSession && <SessionEditor session={editingSession} update={update} onClose={() => setEditingSession(null)} onDelete={() => { deleteSession(editingSession.id); setEditingSession(null); }} customExercises={data.customExercises || []} />}
       {showAddSession && <AddSessionModal update={update} onClose={() => setShowAddSession(false)} />}
+      </div>}
     </div>
   );
 }
