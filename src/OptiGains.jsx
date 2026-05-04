@@ -398,61 +398,26 @@ export default function OptiGains() {
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error
   const syncTimer = useRef(null);
 
-  // On first load, try to pull from Supabase and MERGE with local data
+  // LOCAL IS MASTER. Supabase is backup only. Never overwrite local with cloud.
   useEffect(() => {
+    const local = loadData();
+    if (!local) {
+      // First time ever — try to load from Supabase
+      setSyncStatus("syncing");
+      loadFromSupabase().then(cloud => {
+        if (cloud && cloud.workoutHistory?.length > 0) {
+          setData(cloud);
+          saveData(cloud);
+        }
+        setSyncStatus("synced");
+      }).catch(() => setSyncStatus("offline"));
+      return;
+    }
+    // Local data exists — use it immediately, sync to Supabase in background
     setSyncStatus("syncing");
-    const timeout = setTimeout(() => {
-      setSyncStatus("offline");
-    }, 8000);
-    const local = loadData() || initData();
-
-    loadFromSupabase().then(cloud => {
-      clearTimeout(timeout);
-      if (cloud) {
-        // ALWAYS prefer local workout history if it has entries - never overwrite with empty cloud
-        const localHistory = local.workoutHistory || [];
-        const cloudHistory = cloud.workoutHistory || [];
-
-        // Build merged workout history - deduplicate by id, prefer local
-        const historyMap = {};
-        [...cloudHistory, ...localHistory].forEach(w => { historyMap[w.id] = w; });
-        const mergedWorkoutHistory = Object.values(historyMap).sort((a, b) => new Date(b.date) - new Date(a.date));
-
-        // Merge PRs - keep highest weight per exercise
-        const mergedPRs = { ...(cloud.prs || {}) };
-        Object.entries(local.prs || {}).forEach(([ex, pr]) => {
-          if (!mergedPRs[ex] || pr.weight > mergedPRs[ex].weight) mergedPRs[ex] = pr;
-        });
-
-        // Merge body weight - combine and deduplicate by date, prefer local
-        const bwMap = {};
-        [...(cloud.bodyWeight || []), ...(local.bodyWeight || [])].forEach(b => { bwMap[b.date] = b; });
-        const mergedBodyWeight = Object.values(bwMap).sort((a, b) => a.date.localeCompare(b.date));
-
-        // Merge nutrition - combine and deduplicate by date, prefer local
-        const nutMap = {};
-        [...(cloud.nutrition || []), ...(local.nutrition || [])].forEach(n => { nutMap[n.date] = n; });
-        const mergedNutrition = Object.values(nutMap).sort((a, b) => a.date.localeCompare(b.date));
-
-        const merged = {
-          ...local,
-          settings: cloud.settings || local.settings,
-          sessions: (cloud.sessions || []).length > 0 ? cloud.sessions : local.sessions,
-          skippedSessions: { ...(cloud.skippedSessions || {}), ...(local.skippedSessions || {}) },
-          workoutHistory: mergedWorkoutHistory,
-          bodyWeight: mergedBodyWeight,
-          nutrition: mergedNutrition,
-          prs: mergedPRs,
-          customExercises: local.customExercises || cloud.customExercises || [],
-        };
-        setData(merged);
-        saveData(merged);
-        // Now push merged data back to Supabase to keep it in sync
-        syncToSupabase(merged).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("synced"));
-      } else {
-        setSyncStatus("offline");
-      }
-    }).catch(() => { clearTimeout(timeout); setSyncStatus("offline"); });
+    syncToSupabase(local)
+      .then(() => setSyncStatus("synced"))
+      .catch(() => setSyncStatus("offline"));
   }, []);
 
   // Save locally immediately, sync to Supabase debounced
@@ -667,6 +632,7 @@ function WorkoutTab({ data, update, setWorkoutState, modal, setModal }) {
   const [workoutSubTab, setWorkoutSubTab] = useState("plan"); // plan | history
   const [viewingHistory, setViewingHistory] = useState(null); // workout entry being viewed/edited
   const [editingLog, setEditingLog] = useState(null); // deep copy of log being edited
+  const [showManualEntry, setShowManualEntry] = useState(false);
 
   const startWorkout = (session) => {
     const init = {};
@@ -764,11 +730,12 @@ function WorkoutTab({ data, update, setWorkoutState, modal, setModal }) {
       {/* History Sub Tab */}
       {workoutSubTab === "history" && (
         <div>
+          <button onClick={() => setShowManualEntry(true)} style={{ width: "100%", background: "#60a5fa18", border: "1px solid #60a5fa44", borderRadius: 14, padding: "13px", color: "#60a5fa", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit", marginBottom: 12 }}>+ Log Past Session Manually</button>
           {(data.workoutHistory || []).length === 0 ? (
-            <div style={{ textAlign: "center", padding: "60px 0", color: "#444" }}>
+            <div style={{ textAlign: "center", padding: "40px 0", color: "#444" }}>
               <p style={{ fontSize: 36 }}>🏋️</p>
               <p style={{ fontWeight: 700 }}>No workouts logged yet</p>
-              <p style={{ fontSize: 13 }}>Complete a session to see it here</p>
+              <p style={{ fontSize: 13 }}>Complete a session or log a past one above</p>
             </div>
           ) : (data.workoutHistory || []).map(entry => {
             const color = sessions.find(s => s.id === entry.sessionId)?.color || "#4ade80";
@@ -828,7 +795,115 @@ function WorkoutTab({ data, update, setWorkoutState, modal, setModal }) {
       {/* Edit Session Modal */}
       {editingSession && <SessionEditor session={editingSession} update={update} onClose={() => setEditingSession(null)} onDelete={() => { deleteSession(editingSession.id); setEditingSession(null); }} customExercises={data.customExercises || []} />}
       {showAddSession && <AddSessionModal update={update} onClose={() => setShowAddSession(false)} />}
+      {showManualEntry && <ManualSessionEntry sessions={sessions} update={update} onClose={() => setShowManualEntry(false)} />}
       </div>}
+    </div>
+  );
+}
+
+// ─── MANUAL SESSION ENTRY ─────────────────────────────────────────────────────
+
+function ManualSessionEntry({ sessions, update, onClose }) {
+  const [selectedDate, setSelectedDate] = useState(new Date(Date.now() - 86400000).toISOString().slice(0, 10));
+  const [selectedSession, setSelectedSession] = useState(sessions[0]);
+  const [exerciseRows, setExerciseRows] = useState(() =>
+    sessions[0].exercises.map(ex => ({
+      ...ex,
+      setData: Array.from({ length: ex.sets }, () => ({ weight: "", reps: "", done: true }))
+    }))
+  );
+
+  const changeSession = (sessionId) => {
+    const s = sessions.find(s => s.id === sessionId);
+    setSelectedSession(s);
+    setExerciseRows(s.exercises.map(ex => ({
+      ...ex,
+      setData: Array.from({ length: ex.sets }, () => ({ weight: "", reps: "", done: true }))
+    })));
+  };
+
+  const updateSetData = (exIdx, setIdx, field, val) => {
+    setExerciseRows(prev => prev.map((ex, ei) => ei === exIdx ? {
+      ...ex,
+      setData: ex.setData.map((s, si) => si === setIdx ? { ...s, [field]: val } : s)
+    } : ex));
+  };
+
+  const save = () => {
+    const log = {};
+    exerciseRows.forEach((ex, ei) => {
+      log[ei] = {};
+      ex.setData.forEach((s, si) => { log[ei][si] = { ...s, done: true, dropSets: [] }; });
+    });
+
+    const entry = {
+      id: uid(),
+      sessionId: selectedSession.id,
+      sessionType: selectedSession.type,
+      date: new Date(selectedDate + "T12:00:00").toISOString(),
+      log,
+      exercises: exerciseRows.map(ex => ({ ...ex, setData: undefined })),
+      duration: 60,
+    };
+
+    // Also save PRs
+    update(d => {
+      d.workoutHistory = [entry, ...(d.workoutHistory || [])].sort((a, b) => new Date(b.date) - new Date(a.date));
+      exerciseRows.forEach(ex => {
+        const weights = ex.setData.map(s => parseFloat(s.weight) || 0).filter(w => w > 0);
+        if (weights.length > 0) {
+          const maxW = Math.max(...weights);
+          if (!d.prs[ex.name] || maxW > d.prs[ex.name].weight) {
+            d.prs[ex.name] = { weight: maxW, date: entry.date, exercise: ex.name };
+          }
+        }
+      });
+    });
+    onClose();
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000d", zIndex: 200, overflowY: "auto" }}>
+      <div style={{ background: "#0d1117", minHeight: "100%", maxWidth: 430, margin: "0 auto", padding: "20px 16px 100px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Log Past Session</h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#555", fontSize: 22, cursor: "pointer" }}>✕</button>
+        </div>
+
+        {/* Date picker */}
+        <div style={{ marginBottom: 14 }}>
+          <p style={{ margin: "0 0 6px", fontSize: 11, color: "#555", fontWeight: 700, letterSpacing: 1 }}>DATE</p>
+          <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={{ width: "100%", background: "#111827", border: "1px solid #1a1f2e", borderRadius: 10, color: "#e6edf3", padding: "12px 14px", fontSize: 16, fontFamily: "inherit", boxSizing: "border-box", outline: "none" }} />
+        </div>
+
+        {/* Session picker */}
+        <div style={{ marginBottom: 16 }}>
+          <p style={{ margin: "0 0 6px", fontSize: 11, color: "#555", fontWeight: 700, letterSpacing: 1 }}>SESSION</p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {sessions.map(s => (
+              <button key={s.id} onClick={() => changeSession(s.id)} style={{ background: selectedSession?.id === s.id ? s.color : "#111827", border: `1px solid ${selectedSession?.id === s.id ? "transparent" : "#1a1f2e"}`, borderRadius: 10, padding: "8px 14px", color: selectedSession?.id === s.id ? "#0d1117" : "#555", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{s.icon} {s.type}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Exercises */}
+        <p style={{ margin: "0 0 10px", fontSize: 11, color: "#555", fontWeight: 700, letterSpacing: 1 }}>LOG YOUR SETS</p>
+        {exerciseRows.map((ex, ei) => (
+          <div key={ei} style={{ background: "#111827", border: "1px solid #1a1f2e", borderRadius: 14, padding: "14px", marginBottom: 10 }}>
+            <p style={{ margin: "0 0 2px", fontSize: 11, color: selectedSession?.color || "#4ade80", fontWeight: 700 }}>{ex.muscleGroup?.toUpperCase()}</p>
+            <p style={{ margin: "0 0 10px", fontSize: 15, fontWeight: 700 }}>{ex.name}</p>
+            {ex.setData.map((s, si) => (
+              <div key={si} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                <span style={{ width: 28, fontSize: 13, color: "#555", fontWeight: 700 }}>{si + 1}</span>
+                <input type="number" placeholder="kg" value={s.weight} onChange={e => updateSetData(ei, si, "weight", e.target.value)} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", fontSize: 14, fontWeight: 700, textAlign: "center", padding: "8px 4px", fontFamily: "inherit", outline: "none" }} />
+                <input type="number" placeholder="reps" value={s.reps} onChange={e => updateSetData(ei, si, "reps", e.target.value)} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", fontSize: 14, fontWeight: 700, textAlign: "center", padding: "8px 4px", fontFamily: "inherit", outline: "none" }} />
+              </div>
+            ))}
+          </div>
+        ))}
+
+        <button onClick={save} style={{ width: "100%", background: "#4ade80", border: "none", borderRadius: 14, padding: "15px", color: "#0d1117", fontWeight: 700, fontSize: 15, cursor: "pointer", fontFamily: "inherit", marginTop: 8 }}>Save Session</button>
+      </div>
     </div>
   );
 }
