@@ -666,47 +666,16 @@ function WorkoutTab({ data, update, setWorkoutState, modal, setModal }) {
     const entry = viewingHistory;
     const sessionColor = sessions.find(s => s.id === entry.sessionId)?.color || "#4ade80";
     return (
-      <div style={{ padding: "20px 16px 80px" }}>
-        <button onClick={() => setViewingHistory(null)} style={{ background: "none", border: "none", color: "#555", fontSize: 14, cursor: "pointer", fontFamily: "inherit", marginBottom: 16, padding: 0 }}>← Back to History</button>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-          <div>
-            <p style={{ margin: "0 0 4px", fontSize: 11, color: sessionColor, fontWeight: 700, letterSpacing: 1 }}>{entry.sessionType?.toUpperCase()} DAY</p>
-            <h2 style={{ margin: "0 0 2px", fontSize: 22, fontWeight: 700 }}>{formatDate(entry.date)}</h2>
-            <p style={{ margin: 0, fontSize: 12, color: "#555" }}>{new Date(entry.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} · {entry.duration || 0} mins</p>
-          </div>
-          <button onClick={() => deleteHistoryEntry(entry.id)} style={{ background: "#f8717118", border: "1px solid #f8717144", borderRadius: 10, padding: "7px 12px", color: "#f87171", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>🗑 Delete</button>
-        </div>
-
-        {(entry.exercises || []).map((ex, ei) => {
-          const sets = editingLog?.[ei] || {};
-          return (
-            <div key={ei} style={{ background: "#111827", border: `1px solid ${sessionColor}22`, borderRadius: 14, padding: "14px", marginBottom: 10 }}>
-              <p style={{ margin: "0 0 2px", fontSize: 11, color: sessionColor, fontWeight: 700, letterSpacing: 0.5 }}>{ex.muscleGroup?.toUpperCase()}</p>
-              <p style={{ margin: "0 0 10px", fontSize: 16, fontWeight: 700 }}>{ex.name}</p>
-              {/* Set rows editable */}
-              <div style={{ background: "#0d1117", borderRadius: 10, padding: "0 10px" }}>
-                <div style={{ display: "flex", gap: 6, padding: "8px 0 6px", borderBottom: "1px solid #1a1f2e" }}>
-                  <span style={{ width: 28, fontSize: 10, color: "#3d4451", fontWeight: 700 }}>SET</span>
-                  <span style={{ flex: 1, textAlign: "center", fontSize: 10, color: "#3d4451", fontWeight: 700 }}>KG</span>
-                  <span style={{ flex: 1, textAlign: "center", fontSize: 10, color: "#3d4451", fontWeight: 700 }}>REPS</span>
-                  <span style={{ width: 50, textAlign: "center", fontSize: 10, color: "#3d4451", fontWeight: 700 }}>DONE</span>
-                </div>
-                {Object.entries(sets).map(([si, setData]) => (
-                  <div key={si} style={{ display: "flex", gap: 6, padding: "7px 0", borderBottom: "1px solid #1a1f2e", alignItems: "center" }}>
-                    <span style={{ width: 28, fontSize: 13, fontWeight: 700, color: setData.done ? sessionColor : "#3d4451" }}>{parseInt(si) + 1}</span>
-                    <input type="number" value={setData.weight || ""} onChange={e => setEditingLog(prev => ({ ...prev, [ei]: { ...prev[ei], [si]: { ...prev[ei][si], weight: e.target.value } } }))} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", fontSize: 14, fontWeight: 700, textAlign: "center", padding: "6px 4px", fontFamily: "inherit", outline: "none" }} placeholder="—" />
-                    <input type="number" value={setData.reps || ""} onChange={e => setEditingLog(prev => ({ ...prev, [ei]: { ...prev[ei], [si]: { ...prev[ei][si], reps: e.target.value } } }))} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", fontSize: 14, fontWeight: 700, textAlign: "center", padding: "6px 4px", fontFamily: "inherit", outline: "none" }} placeholder="—" />
-                    <div style={{ width: 50, textAlign: "center" }}>
-                      <span style={{ fontSize: 14, color: setData.done ? sessionColor : "#2a2f3e" }}>{setData.done ? "✓" : "○"}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-        <button onClick={saveHistoryEdit} style={{ width: "100%", background: "#4ade80", border: "none", borderRadius: 14, padding: "15px", color: "#0d1117", fontWeight: 700, fontSize: 15, cursor: "pointer", fontFamily: "inherit", marginTop: 8 }}>Save Changes</button>
-      </div>
+      <HistoryDetailView
+        entry={entry}
+        sessionColor={sessionColor}
+        editingLog={editingLog}
+        setEditingLog={setEditingLog}
+        setViewingHistory={setViewingHistory}
+        saveHistoryEdit={saveHistoryEdit}
+        deleteHistoryEntry={deleteHistoryEntry}
+        update={update}
+      />
     );
   }
 
@@ -794,6 +763,148 @@ function WorkoutTab({ data, update, setWorkoutState, modal, setModal }) {
       {showAddSession && <AddSessionModal update={update} onClose={() => setShowAddSession(false)} />}
       {showManualEntry && <ManualSessionEntry sessions={sessions} update={update} onClose={() => setShowManualEntry(false)} />}
       </div>}
+    </div>
+  );
+}
+
+// ─── HISTORY DETAIL VIEW ─────────────────────────────────────────────────────
+
+function HistoryDetailView({ entry, sessionColor, editingLog, setEditingLog, setViewingHistory, saveHistoryEdit, deleteHistoryEntry, update }) {
+  const [editingExIdx, setEditingExIdx] = useState(null);
+  const [editingExName, setEditingExName] = useState("");
+  const [editingExMG, setEditingExMG] = useState("Chest");
+  const [localExercises, setLocalExercises] = useState(() => JSON.parse(JSON.stringify(entry.exercises || [])));
+
+  const startEditEx = (idx) => {
+    setEditingExIdx(idx);
+    setEditingExName(localExercises[idx].name);
+    setEditingExMG(localExercises[idx].muscleGroup || "Chest");
+  };
+
+  const saveEditEx = () => {
+    setLocalExercises(prev => prev.map((ex, i) => i === editingExIdx ? { ...ex, name: editingExName, muscleGroup: editingExMG } : ex));
+    setEditingExIdx(null);
+  };
+
+  const removeEx = (idx) => {
+    setLocalExercises(prev => prev.filter((_, i) => i !== idx));
+    // Also remove from editingLog
+    setEditingLog(prev => {
+      const next = {};
+      let newIdx = 0;
+      Object.entries(prev).forEach(([k, v]) => {
+        if (parseInt(k) !== idx) { next[newIdx] = v; newIdx++; }
+      });
+      return next;
+    });
+  };
+
+  const addSet = (exIdx) => {
+    const currentSets = editingLog?.[exIdx] || {};
+    const nextIdx = Object.keys(currentSets).length;
+    setEditingLog(prev => ({ ...prev, [exIdx]: { ...prev[exIdx], [nextIdx]: { weight: "", reps: "", done: false, dropSets: [] } } }));
+  };
+
+  const removeSet = (exIdx, setIdx) => {
+    setEditingLog(prev => {
+      const exSets = { ...prev[exIdx] };
+      delete exSets[setIdx];
+      // Reindex
+      const reindexed = {};
+      Object.values(exSets).forEach((s, i) => { reindexed[i] = s; });
+      return { ...prev, [exIdx]: reindexed };
+    });
+  };
+
+  const saveAll = () => {
+    update(d => {
+      const idx = d.workoutHistory.findIndex(w => w.id === entry.id);
+      if (idx >= 0) {
+        d.workoutHistory[idx] = { ...d.workoutHistory[idx], log: editingLog, exercises: localExercises };
+        // Update PRs from edited data
+        localExercises.forEach((ex, ei) => {
+          const sets = Object.values(editingLog[ei] || {});
+          const weights = sets.map(s => parseFloat(s.weight) || 0).filter(w => w > 0);
+          if (weights.length > 0) {
+            const maxW = Math.max(...weights);
+            if (!d.prs[ex.name] || maxW > d.prs[ex.name].weight) {
+              d.prs[ex.name] = { weight: maxW, date: entry.date, exercise: ex.name };
+            }
+          }
+        });
+      }
+    });
+    setViewingHistory(null);
+  };
+
+  return (
+    <div style={{ padding: "20px 16px 80px" }}>
+      <button onClick={() => setViewingHistory(null)} style={{ background: "none", border: "none", color: "#555", fontSize: 14, cursor: "pointer", fontFamily: "inherit", marginBottom: 16, padding: 0 }}>← Back to History</button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+        <div>
+          <p style={{ margin: "0 0 4px", fontSize: 11, color: sessionColor, fontWeight: 700, letterSpacing: 1 }}>{entry.sessionType?.toUpperCase()} DAY</p>
+          <h2 style={{ margin: "0 0 2px", fontSize: 22, fontWeight: 700 }}>{formatDate(entry.date)}</h2>
+          <p style={{ margin: 0, fontSize: 12, color: "#555" }}>{new Date(entry.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} · {entry.duration || 0} mins</p>
+        </div>
+        <button onClick={() => deleteHistoryEntry(entry.id)} style={{ background: "#f8717118", border: "1px solid #f8717144", borderRadius: 10, padding: "7px 12px", color: "#f87171", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>🗑 Delete</button>
+      </div>
+
+      {localExercises.map((ex, ei) => {
+        const sets = editingLog?.[ei] || {};
+        return (
+          <div key={ei} style={{ background: "#111827", border: `1px solid ${sessionColor}22`, borderRadius: 14, padding: "14px", marginBottom: 10 }}>
+            {/* Exercise name — editable */}
+            {editingExIdx === ei ? (
+              <div style={{ marginBottom: 10 }}>
+                <input value={editingExName} onChange={e => setEditingExName(e.target.value)} style={{ width: "100%", background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", padding: "8px 12px", fontSize: 14, fontWeight: 700, fontFamily: "inherit", marginBottom: 6, boxSizing: "border-box", outline: "none" }} />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <select value={editingExMG} onChange={e => setEditingExMG(e.target.value)} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", padding: "7px", fontSize: 12, fontFamily: "inherit" }}>
+                    {MUSCLE_GROUPS.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <button onClick={saveEditEx} style={{ background: "#4ade80", border: "none", borderRadius: 8, padding: "7px 14px", color: "#0d1117", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}>Save</button>
+                  <button onClick={() => setEditingExIdx(null)} style={{ background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, padding: "7px 10px", color: "#555", cursor: "pointer", fontFamily: "inherit" }}>✕</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div>
+                  <p style={{ margin: "0 0 2px", fontSize: 11, color: sessionColor, fontWeight: 700, letterSpacing: 0.5 }}>{ex.muscleGroup?.toUpperCase()}</p>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{ex.name}</p>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => startEditEx(ei)} style={{ background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, padding: "5px 9px", color: "#888", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>✏️</button>
+                  <button onClick={() => removeEx(ei)} style={{ background: "#f8717118", border: "1px solid #f8717144", borderRadius: 8, padding: "5px 9px", color: "#f87171", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>🗑</button>
+                </div>
+              </div>
+            )}
+
+            {/* Set rows */}
+            <div style={{ background: "#0d1117", borderRadius: 10, padding: "0 10px" }}>
+              <div style={{ display: "flex", gap: 6, padding: "8px 0 6px", borderBottom: "1px solid #1a1f2e" }}>
+                <span style={{ width: 28, fontSize: 10, color: "#3d4451", fontWeight: 700 }}>SET</span>
+                <span style={{ flex: 1, textAlign: "center", fontSize: 10, color: "#3d4451", fontWeight: 700 }}>KG</span>
+                <span style={{ flex: 1, textAlign: "center", fontSize: 10, color: "#3d4451", fontWeight: 700 }}>REPS</span>
+                <span style={{ width: 36, textAlign: "center", fontSize: 10, color: "#3d4451", fontWeight: 700 }}>✓</span>
+                <span style={{ width: 24 }} />
+              </div>
+              {Object.entries(sets).map(([si, setData]) => (
+                <div key={si} style={{ display: "flex", gap: 6, padding: "7px 0", borderBottom: "1px solid #1a1f2e", alignItems: "center" }}>
+                  <span style={{ width: 28, fontSize: 13, fontWeight: 700, color: setData.done ? sessionColor : "#3d4451" }}>{parseInt(si) + 1}</span>
+                  <input type="number" value={setData.weight || ""} onChange={e => setEditingLog(prev => ({ ...prev, [ei]: { ...prev[ei], [si]: { ...prev[ei][si], weight: e.target.value } } }))} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", fontSize: 14, fontWeight: 700, textAlign: "center", padding: "6px 4px", fontFamily: "inherit", outline: "none" }} placeholder="—" />
+                  <input type="number" value={setData.reps || ""} onChange={e => setEditingLog(prev => ({ ...prev, [ei]: { ...prev[ei], [si]: { ...prev[ei][si], reps: e.target.value } } }))} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", fontSize: 14, fontWeight: 700, textAlign: "center", padding: "6px 4px", fontFamily: "inherit", outline: "none" }} placeholder="—" />
+                  <div style={{ width: 36, textAlign: "center" }}>
+                    <span style={{ fontSize: 14, color: setData.done ? sessionColor : "#2a2f3e" }}>{setData.done ? "✓" : "○"}</span>
+                  </div>
+                  <button onClick={() => removeSet(ei, parseInt(si))} style={{ width: 24, background: "none", border: "none", color: "#3d4451", cursor: "pointer", fontSize: 14, padding: 0 }}>✕</button>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => addSet(ei)} style={{ background: "none", border: "none", color: sessionColor, fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, padding: "6px 0", marginTop: 2 }}>+ Add Set</button>
+          </div>
+        );
+      })}
+
+      <button onClick={saveAll} style={{ width: "100%", background: "#4ade80", border: "none", borderRadius: 14, padding: "15px", color: "#0d1117", fontWeight: 700, fontSize: 15, cursor: "pointer", fontFamily: "inherit", marginTop: 8 }}>Save All Changes</button>
     </div>
   );
 }
