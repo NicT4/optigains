@@ -812,6 +812,13 @@ function ManualSessionEntry({ sessions, update, onClose }) {
       setData: Array.from({ length: ex.sets }, () => ({ weight: "", reps: "", done: true }))
     }))
   );
+  const [editingExIdx, setEditingExIdx] = useState(null);
+  const [editingExName, setEditingExName] = useState("");
+  const [editingExMG, setEditingExMG] = useState("Chest");
+  const [showAddEx, setShowAddEx] = useState(false);
+  const [newExName, setNewExName] = useState("");
+  const [newExMG, setNewExMG] = useState("Chest");
+  const [newExSets, setNewExSets] = useState(3);
 
   const changeSession = (sessionId) => {
     const s = sessions.find(s => s.id === sessionId);
@@ -829,24 +836,54 @@ function ManualSessionEntry({ sessions, update, onClose }) {
     } : ex));
   };
 
+  const startEditEx = (idx) => {
+    setEditingExIdx(idx);
+    setEditingExName(exerciseRows[idx].name);
+    setEditingExMG(exerciseRows[idx].muscleGroup);
+  };
+
+  const saveEditEx = () => {
+    setExerciseRows(prev => prev.map((ex, i) => i === editingExIdx ? { ...ex, name: editingExName, muscleGroup: editingExMG } : ex));
+    setEditingExIdx(null);
+  };
+
+  const removeEx = (idx) => {
+    setExerciseRows(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const addSet = (idx) => {
+    setExerciseRows(prev => prev.map((ex, i) => i === idx ? { ...ex, setData: [...ex.setData, { weight: "", reps: "", done: true }] } : ex));
+  };
+
+  const removeSet = (exIdx, setIdx) => {
+    setExerciseRows(prev => prev.map((ex, i) => i === exIdx ? { ...ex, setData: ex.setData.filter((_, si) => si !== setIdx) } : ex));
+  };
+
+  const addNewEx = () => {
+    if (!newExName.trim()) return;
+    setExerciseRows(prev => [...prev, {
+      id: uid(), name: newExName.trim(), muscleGroup: newExMG, sets: newExSets,
+      reps: "—", notes: "", supersetWith: null,
+      setData: Array.from({ length: newExSets }, () => ({ weight: "", reps: "", done: true }))
+    }]);
+    setNewExName(""); setShowAddEx(false);
+  };
+
   const save = () => {
     const log = {};
     exerciseRows.forEach((ex, ei) => {
       log[ei] = {};
       ex.setData.forEach((s, si) => { log[ei][si] = { ...s, done: true, dropSets: [] }; });
     });
-
     const entry = {
       id: uid(),
       sessionId: selectedSession.id,
       sessionType: selectedSession.type,
       date: new Date(selectedDate + "T12:00:00").toISOString(),
       log,
-      exercises: exerciseRows.map(ex => ({ ...ex, setData: undefined })),
+      exercises: exerciseRows.map(ex => { const { setData, ...rest } = ex; return rest; }),
       duration: 60,
     };
-
-    // Also save PRs
     update(d => {
       d.workoutHistory = [entry, ...(d.workoutHistory || [])].sort((a, b) => new Date(b.date) - new Date(a.date));
       exerciseRows.forEach(ex => {
@@ -861,6 +898,8 @@ function ManualSessionEntry({ sessions, update, onClose }) {
     });
     onClose();
   };
+
+  const ic = selectedSession?.color || "#4ade80";
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000d", zIndex: 200, overflowY: "auto" }}>
@@ -889,20 +928,66 @@ function ManualSessionEntry({ sessions, update, onClose }) {
         {/* Exercises */}
         <p style={{ margin: "0 0 10px", fontSize: 11, color: "#555", fontWeight: 700, letterSpacing: 1 }}>LOG YOUR SETS</p>
         {exerciseRows.map((ex, ei) => (
-          <div key={ei} style={{ background: "#111827", border: "1px solid #1a1f2e", borderRadius: 14, padding: "14px", marginBottom: 10 }}>
-            <p style={{ margin: "0 0 2px", fontSize: 11, color: selectedSession?.color || "#4ade80", fontWeight: 700 }}>{ex.muscleGroup?.toUpperCase()}</p>
-            <p style={{ margin: "0 0 10px", fontSize: 15, fontWeight: 700 }}>{ex.name}</p>
+          <div key={ei} style={{ background: "#111827", border: `1px solid ${ic}22`, borderRadius: 14, padding: "14px", marginBottom: 10 }}>
+            {/* Exercise header with edit */}
+            {editingExIdx === ei ? (
+              <div style={{ marginBottom: 10 }}>
+                <input value={editingExName} onChange={e => setEditingExName(e.target.value)} style={{ width: "100%", background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", padding: "8px 12px", fontSize: 14, fontWeight: 700, fontFamily: "inherit", marginBottom: 6, boxSizing: "border-box", outline: "none" }} />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <select value={editingExMG} onChange={e => setEditingExMG(e.target.value)} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", padding: "7px", fontSize: 12, fontFamily: "inherit" }}>
+                    {MUSCLE_GROUPS.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <button onClick={saveEditEx} style={{ background: "#4ade80", border: "none", borderRadius: 8, padding: "7px 14px", color: "#0d1117", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}>Save</button>
+                  <button onClick={() => setEditingExIdx(null)} style={{ background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, padding: "7px 10px", color: "#555", cursor: "pointer", fontFamily: "inherit" }}>✕</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                <div>
+                  <p style={{ margin: "0 0 2px", fontSize: 11, color: ic, fontWeight: 700 }}>{ex.muscleGroup?.toUpperCase()}</p>
+                  <p style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>{ex.name}</p>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => startEditEx(ei)} style={{ background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, padding: "5px 9px", color: "#888", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>✏️</button>
+                  <button onClick={() => removeEx(ei)} style={{ background: "#f8717118", border: "1px solid #f8717144", borderRadius: 8, padding: "5px 9px", color: "#f87171", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>🗑</button>
+                </div>
+              </div>
+            )}
+
+            {/* Set rows */}
             {ex.setData.map((s, si) => (
               <div key={si} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
                 <span style={{ width: 28, fontSize: 13, color: "#555", fontWeight: 700 }}>{si + 1}</span>
                 <input type="number" placeholder="kg" value={s.weight} onChange={e => updateSetData(ei, si, "weight", e.target.value)} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", fontSize: 14, fontWeight: 700, textAlign: "center", padding: "8px 4px", fontFamily: "inherit", outline: "none" }} />
                 <input type="number" placeholder="reps" value={s.reps} onChange={e => updateSetData(ei, si, "reps", e.target.value)} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", fontSize: 14, fontWeight: 700, textAlign: "center", padding: "8px 4px", fontFamily: "inherit", outline: "none" }} />
+                <button onClick={() => removeSet(ei, si)} style={{ background: "none", border: "none", color: "#3d4451", cursor: "pointer", fontSize: 16, padding: "0 4px" }}>✕</button>
               </div>
             ))}
+            <button onClick={() => addSet(ei)} style={{ background: "none", border: "none", color: ic, fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, padding: "4px 0", marginTop: 2 }}>+ Add Set</button>
           </div>
         ))}
 
-        <button onClick={save} style={{ width: "100%", background: "#4ade80", border: "none", borderRadius: 14, padding: "15px", color: "#0d1117", fontWeight: 700, fontSize: 15, cursor: "pointer", fontFamily: "inherit", marginTop: 8 }}>Save Session</button>
+        {/* Add exercise */}
+        {showAddEx ? (
+          <div style={{ background: "#111827", border: "1px solid #4ade8033", borderRadius: 14, padding: "14px", marginBottom: 10 }}>
+            <p style={{ margin: "0 0 10px", fontSize: 13, color: "#4ade80", fontWeight: 700 }}>+ New Exercise</p>
+            <input placeholder="Exercise name" value={newExName} onChange={e => setNewExName(e.target.value)} style={{ width: "100%", background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", padding: "9px 12px", fontSize: 14, fontFamily: "inherit", marginBottom: 8, boxSizing: "border-box", outline: "none" }} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 60px", gap: 8, marginBottom: 10 }}>
+              <select value={newExMG} onChange={e => setNewExMG(e.target.value)} style={{ background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", padding: "8px", fontSize: 13, fontFamily: "inherit" }}>
+                {MUSCLE_GROUPS.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <input type="number" value={newExSets} onChange={e => setNewExSets(parseInt(e.target.value) || 3)} min="1" max="10" style={{ background: "#1a1f2e", border: "1px solid #2a2f3e", borderRadius: 8, color: "#e6edf3", padding: "8px", fontSize: 13, textAlign: "center", fontFamily: "inherit" }} />
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setShowAddEx(false)} style={{ flex: 1, background: "none", border: "1px solid #1a1f2e", borderRadius: 8, padding: "9px", color: "#555", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+              <button onClick={addNewEx} style={{ flex: 2, background: "#4ade80", border: "none", borderRadius: 8, padding: "9px", color: "#0d1117", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Add</button>
+            </div>
+          </div>
+        ) : (
+          <button onClick={() => setShowAddEx(true)} style={{ width: "100%", background: "#1a1f2e", border: "1px dashed #2a2f3e", borderRadius: 12, padding: "12px", color: "#555", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginBottom: 14 }}>+ Add Exercise</button>
+        )}
+
+        <button onClick={save} style={{ width: "100%", background: "#4ade80", border: "none", borderRadius: 14, padding: "15px", color: "#0d1117", fontWeight: 700, fontSize: 15, cursor: "pointer", fontFamily: "inherit" }}>Save Session</button>
       </div>
     </div>
   );
