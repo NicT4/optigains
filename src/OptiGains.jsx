@@ -405,40 +405,50 @@ export default function OptiGains() {
       setSyncStatus("offline");
     }, 8000);
     const local = loadData() || initData();
+
     loadFromSupabase().then(cloud => {
       clearTimeout(timeout);
       if (cloud) {
-        // Merge: keep whichever has more workout history, merge body weight and nutrition
-        const mergedWorkoutHistory = cloud.workoutHistory.length >= local.workoutHistory.length
-          ? cloud.workoutHistory
-          : local.workoutHistory;
-        // Merge body weight - combine and deduplicate by date
-        const bwMap = {};
-        [...(local.bodyWeight || []), ...(cloud.bodyWeight || [])].forEach(b => { bwMap[b.date] = b; });
-        const mergedBodyWeight = Object.values(bwMap).sort((a, b) => a.date.localeCompare(b.date));
-        // Merge nutrition - combine and deduplicate by date
-        const nutMap = {};
-        [...(local.nutrition || []), ...(cloud.nutrition || [])].forEach(n => { nutMap[n.date] = n; });
-        const mergedNutrition = Object.values(nutMap).sort((a, b) => a.date.localeCompare(b.date));
+        // ALWAYS prefer local workout history if it has entries - never overwrite with empty cloud
+        const localHistory = local.workoutHistory || [];
+        const cloudHistory = cloud.workoutHistory || [];
+
+        // Build merged workout history - deduplicate by id, prefer local
+        const historyMap = {};
+        [...cloudHistory, ...localHistory].forEach(w => { historyMap[w.id] = w; });
+        const mergedWorkoutHistory = Object.values(historyMap).sort((a, b) => new Date(b.date) - new Date(a.date));
+
         // Merge PRs - keep highest weight per exercise
-        const mergedPRs = { ...local.prs };
-        Object.entries(cloud.prs || {}).forEach(([ex, pr]) => {
+        const mergedPRs = { ...(cloud.prs || {}) };
+        Object.entries(local.prs || {}).forEach(([ex, pr]) => {
           if (!mergedPRs[ex] || pr.weight > mergedPRs[ex].weight) mergedPRs[ex] = pr;
         });
+
+        // Merge body weight - combine and deduplicate by date, prefer local
+        const bwMap = {};
+        [...(cloud.bodyWeight || []), ...(local.bodyWeight || [])].forEach(b => { bwMap[b.date] = b; });
+        const mergedBodyWeight = Object.values(bwMap).sort((a, b) => a.date.localeCompare(b.date));
+
+        // Merge nutrition - combine and deduplicate by date, prefer local
+        const nutMap = {};
+        [...(cloud.nutrition || []), ...(local.nutrition || [])].forEach(n => { nutMap[n.date] = n; });
+        const mergedNutrition = Object.values(nutMap).sort((a, b) => a.date.localeCompare(b.date));
+
         const merged = {
           ...local,
           settings: cloud.settings || local.settings,
-          sessions: cloud.sessions?.length ? cloud.sessions : local.sessions,
-          skippedSessions: cloud.skippedSessions || local.skippedSessions,
+          sessions: (cloud.sessions || []).length > 0 ? cloud.sessions : local.sessions,
+          skippedSessions: { ...(cloud.skippedSessions || {}), ...(local.skippedSessions || {}) },
           workoutHistory: mergedWorkoutHistory,
           bodyWeight: mergedBodyWeight,
           nutrition: mergedNutrition,
           prs: mergedPRs,
-          customExercises: local.customExercises || [],
+          customExercises: local.customExercises || cloud.customExercises || [],
         };
         setData(merged);
         saveData(merged);
-        setSyncStatus("synced");
+        // Now push merged data back to Supabase to keep it in sync
+        syncToSupabase(merged).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("synced"));
       } else {
         setSyncStatus("offline");
       }
