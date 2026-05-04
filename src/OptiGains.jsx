@@ -144,7 +144,7 @@ const SESSION_ICONS = { Push: "💪", Pull: "🏋️", Legs: "🦵", Upper: "⚡
 // ─── SUPABASE CONFIG ──────────────────────────────────────────────────────────
 
 const SUPABASE_URL = "https://elbgsmahfnayjqyrevwe.supabase.co";
-const SUPABASE_KEY = "sb_publishable_aaIVVHLW82T6BdFNG2zYJg_H9uf318q";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVsYmdzbWFoZm5heWpxeXJldndlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4Njg3OTksImV4cCI6MjA5MzQ0NDc5OX0.kAlsjV5p2O9jPftH8Got6OG7xij3cXHjZKEjGIIrdgg";
 
 const sb = {
   async query(table, method = "GET", body = null, params = "") {
