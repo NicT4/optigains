@@ -144,29 +144,47 @@ const SESSION_ICONS = { Push: "💪", Pull: "🏋️", Legs: "🦵", Upper: "⚡
 // ─── SUPABASE CONFIG ──────────────────────────────────────────────────────────
 
 const SUPABASE_URL = "https://elbgsmahfnayjqyrevwe.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVsYmdzbWFoZm5heWpxeXJldndlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4Njg3OTksImV4cCI6MjA5MzQ0NDc5OX0.kAlsjV5p2O9jPftH8Got6OG7xij3cXHjZKEjGIIrdgg";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVsYmdzbWFoZm5heWpxeXJldndlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4Njg3OTksImV4cCI6MjA5MzQ0NDc5OX0.kAlsjV5p2O9jPftH8Got6OG7xij3cXHjZKEjGIIrdgg";
+
+// Lazy-load Supabase JS client to avoid CORS/allowlist issues with raw fetch
+let _supabase = null;
+async function getSupabase() {
+  if (_supabase) return _supabase;
+  // Dynamically import from CDN
+  const { createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm");
+  _supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return _supabase;
+}
 
 const sb = {
-  async query(table, method = "GET", body = null, params = "") {
-    const url = `${SUPABASE_URL}/rest/v1/${table}${params}`;
-    const opts = {
-      method,
-      headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "application/json",
-        "Prefer": method === "POST" ? "resolution=merge-duplicates,return=representation" : "return=representation",
-      },
-    };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(url, opts);
-    if (!res.ok) return null;
-    const text = await res.text();
-    return text ? JSON.parse(text) : null;
+  async upsert(table, body) {
+    try {
+      const client = await getSupabase();
+      const { data, error } = await client.from(table).upsert(body, { onConflict: Object.keys(body)[0] });
+      if (error) { console.warn("Supabase upsert error:", error); return null; }
+      return data;
+    } catch(e) { console.warn("Supabase upsert failed:", e); return null; }
   },
-  get: (table, params = "") => sb.query(table, "GET", null, params),
-  upsert: (table, body) => sb.query(table, "POST", body),
-  patch: (table, body, params) => sb.query(table, "PATCH", body, params),
+  async get(table, filters = {}) {
+    try {
+      const client = await getSupabase();
+      let query = client.from(table).select("*");
+      Object.entries(filters).forEach(([k, v]) => { query = query.eq(k, v); });
+      const { data, error } = await query;
+      if (error) { console.warn("Supabase get error:", error); return null; }
+      return data;
+    } catch(e) { console.warn("Supabase get failed:", e); return null; }
+  },
+  async getOrdered(table, orderCol, limit = null) {
+    try {
+      const client = await getSupabase();
+      let query = client.from(table).select("*").order(orderCol, { ascending: true });
+      if (limit) query = query.limit(limit);
+      const { data, error } = await query;
+      if (error) { console.warn("Supabase getOrdered error:", error); return null; }
+      return data;
+    } catch(e) { console.warn("Supabase getOrdered failed:", e); return null; }
+  },
 };
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
@@ -203,28 +221,18 @@ function initData() {
 
 async function syncToSupabase(data) {
   try {
-    // Upsert settings
     await sb.upsert("app_settings", { id: 1, data: data.settings });
-
-    // Upsert sessions
     await sb.upsert("sessions", { id: 1, data: data.sessions, skipped: data.skippedSessions || {} });
 
-    // Sync body weight entries
     for (const bw of (data.bodyWeight || [])) {
       await sb.upsert("body_weight", { date: bw.date, value: bw.value });
     }
-
-    // Sync nutrition entries
     for (const n of (data.nutrition || [])) {
       await sb.upsert("nutrition", { date: n.date, calories: n.calories, notes: n.notes || "" });
     }
-
-    // Sync PRs
     for (const [exercise, pr] of Object.entries(data.prs || {})) {
       await sb.upsert("personal_records", { exercise, weight: pr.weight, date: pr.date });
     }
-
-    // Sync workout history (last 50)
     for (const w of (data.workoutHistory || []).slice(0, 50)) {
       await sb.upsert("workout_history", {
         id: w.id, session_id: w.sessionId, session_type: w.sessionType,
@@ -237,12 +245,12 @@ async function syncToSupabase(data) {
 async function loadFromSupabase() {
   try {
     const [settingsRes, sessionsRes, bwRes, nutRes, prRes, histRes] = await Promise.all([
-      sb.get("app_settings", "?id=eq.1"),
-      sb.get("sessions", "?id=eq.1"),
-      sb.get("body_weight", "?order=date.asc"),
-      sb.get("nutrition", "?order=date.asc"),
+      sb.get("app_settings", { id: 1 }),
+      sb.get("sessions", { id: 1 }),
+      sb.getOrdered("body_weight", "date"),
+      sb.getOrdered("nutrition", "date"),
       sb.get("personal_records"),
-      sb.get("workout_history", "?order=date.desc&limit=100"),
+      sb.getOrdered("workout_history", "date"),
     ]);
 
     const settings = settingsRes?.[0]?.data || null;
@@ -251,12 +259,12 @@ async function loadFromSupabase() {
     const nutrition = (nutRes || []).map(r => ({ date: r.date, calories: r.calories, notes: r.notes }));
     const prs = {};
     (prRes || []).forEach(r => { prs[r.exercise] = { weight: r.weight, date: r.date, exercise: r.exercise }; });
-    const workoutHistory = (histRes || []).map(r => ({
+    const workoutHistory = (histRes || []).reverse().map(r => ({
       id: r.id, sessionId: r.session_id, sessionType: r.session_type,
       date: r.date, log: r.log, exercises: r.exercises, duration: r.duration
     }));
 
-    if (!settings) return null; // Nothing in Supabase yet
+    if (!settings) return null;
 
     return {
       settings,
@@ -267,6 +275,7 @@ async function loadFromSupabase() {
       prs,
       workoutHistory,
       chatHistory: [],
+      customExercises: [],
     };
   } catch (e) { console.warn("Supabase load error:", e); return null; }
 }
