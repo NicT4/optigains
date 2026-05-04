@@ -398,18 +398,22 @@ export default function OptiGains() {
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error
   const syncTimer = useRef(null);
 
-  // On first load, try to pull from Supabase
+  // On first load, try to pull from Supabase with 5 second timeout
   useEffect(() => {
     setSyncStatus("syncing");
+    const timeout = setTimeout(() => {
+      setSyncStatus("offline");
+    }, 5000);
     loadFromSupabase().then(cloud => {
+      clearTimeout(timeout);
       if (cloud) {
         setData(cloud);
         saveData(cloud);
         setSyncStatus("synced");
       } else {
-        setSyncStatus("idle");
+        setSyncStatus("offline");
       }
-    }).catch(() => setSyncStatus("error"));
+    }).catch(() => { clearTimeout(timeout); setSyncStatus("offline"); });
   }, []);
 
   // Save locally immediately, sync to Supabase debounced
@@ -420,8 +424,8 @@ export default function OptiGains() {
       setSyncStatus("syncing");
       syncToSupabase(data)
         .then(() => setSyncStatus("synced"))
-        .catch(() => setSyncStatus("error"));
-    }, 1500);
+        .catch(() => setSyncStatus("offline"));
+    }, 2000);
     return () => clearTimeout(syncTimer.current);
   }, [data]);
 
@@ -429,7 +433,7 @@ export default function OptiGains() {
 
   // ─── RENDER ───────────────────────────────────────────────────────────────
 
-  const syncDot = { idle: null, syncing: "#f59e0b", synced: "#4ade80", error: "#f87171" }[syncStatus];
+  const syncDot = { idle: null, syncing: "#f59e0b", synced: "#4ade80", error: "#f87171", offline: "#f87171" }[syncStatus];
 
   return (
     <div style={{ background: "#0d1117", minHeight: "100vh", color: "#e6edf3", fontFamily: "'DM Mono', 'Courier New', monospace", maxWidth: 430, margin: "0 auto", position: "relative" }}>
@@ -438,7 +442,7 @@ export default function OptiGains() {
         <div style={{ position: "fixed", top: 12, right: 16, zIndex: 999, display: "flex", alignItems: "center", gap: 5 }}>
           <div style={{ width: 7, height: 7, borderRadius: "50%", background: syncDot, boxShadow: `0 0 6px ${syncDot}` }} />
           <span style={{ fontSize: 10, color: syncDot, fontWeight: 700, letterSpacing: 0.5 }}>
-            {syncStatus === "syncing" ? "SYNCING" : syncStatus === "synced" ? "SAVED" : "OFFLINE"}
+            {syncStatus === "syncing" ? "SYNCING..." : syncStatus === "synced" ? "SAVED" : syncStatus === "offline" ? "OFFLINE" : "SAVED"}
           </span>
         </div>
       )}
@@ -500,9 +504,11 @@ function DashboardTab({ data, update, setWorkoutState }) {
   const thisWeekSessions = workoutHistory.filter(w => {
     const d = new Date(w.date);
     const now = new Date();
-    const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
-    weekStart.setHours(0, 0, 0, 0);
-    return d >= weekStart;
+    // Get Monday of current week in local time
+    const day = now.getDay(); // 0=Sun, 1=Mon ... 6=Sat
+    const daysToMonday = day === 0 ? 6 : day - 1;
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysToMonday, 0, 0, 0, 0);
+    return d >= monday;
   }).length;
   const weeklyPRs = Object.values(prs).filter(pr => {
     const d = new Date(pr.date);
@@ -598,9 +604,10 @@ function DashboardTab({ data, update, setWorkoutState }) {
               const done = workoutHistory.some(w => {
                 const d = new Date(w.date);
                 const now = new Date();
-                const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
-                weekStart.setHours(0, 0, 0, 0);
-                return d >= weekStart && w.sessionId === s.id;
+                const day = now.getDay();
+                const daysToMonday = day === 0 ? 6 : day - 1;
+                const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysToMonday, 0, 0, 0, 0);
+                return d >= monday && w.sessionId === s.id;
               });
               return <div key={i} style={{ width: 10, height: 10, borderRadius: "50%", background: done ? s.color : "#1a1f2e", border: `1px solid ${done ? s.color : "#2a2f3e"}` }} />;
             })}
